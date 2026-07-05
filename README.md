@@ -18,6 +18,9 @@ WEBP / PNG / JPEG の画像が入ったフォルダを選ぶだけで PDF に変
 - 既存 PDF があっても**上書きせず連番**（`name_1.pdf`）で保存。**元画像・元フォルダは削除しません**
 - **モダンなダークテーマ UI**：グラデーションアクセント・ドラッグ中のグロー表示・
   クリックでも選択できるドロップ領域・Windows タイトルバーのダーク化
+- **バージョン表示 / アップデート確認**：画面右上に現在のバージョンを常時表示。
+  ［アップデートを確認］から GitHub の最新リリースをチェックし、新しい配布ファイル
+  （インストーラー exe）があればアプリ内でダウンロード → インストーラー起動まで行える
 
 > HEIC / AVIF / GIF は初版では非対応です（将来対応予定）。
 
@@ -73,6 +76,25 @@ pyinstaller build\imagetopdf.spec --noconfirm
 
 ---
 
+## アップデート確認の仕組み
+
+- アプリ右上の「v1.0.0」表示の隣にある **［アップデートを確認］** を押すと、
+  GitHub の `https://github.com/tajeru/ImageToPdf` の **最新 Release** を問い合わせます
+  （公開リポジトリの読み取り専用 API のため認証不要）。
+- 現在のバージョンより新しいタグが見つかった場合、リリースノートを表示し、
+  ダウンロードするか確認します。同意すると、Release に添付された Windows 用
+  インストーラー（`*Setup*.exe`）をアプリ内でダウンロードし、完了後に
+  「インストーラーを起動して終了しますか？」と確認したうえで起動・自動終了します。
+- Release にインストーラー資産が無い場合は、ブラウザで Release ページを開くだけの
+  安全なフォールバックになります。
+- **新バージョンをリリースする側の運用**：`git tag vX.Y.Z && git push origin vX.Y.Z`
+  でタグを付け、GitHub の Releases 画面からそのタグを選んで Release を公開し、
+  `build\build.ps1` で生成したインストーラー `.exe` を Release にアセットとして
+  添付してください。アセットが無いと「アップデートあり」までは通知されますが、
+  自動ダウンロードは行われません（ブラウザでの手動ダウンロードに切り替わります）。
+
+---
+
 ## プロジェクト構成
 
 ```
@@ -84,12 +106,13 @@ ImageToPDF/
 │   ├── app.py                   # QApplication 起動
 │   ├── config.py                # 既定値・ConvertOptions・設定の保存/読込
 │   ├── logging_setup.py         # ログ（%LOCALAPPDATA%\ImageToPDF\logs）
-│   ├── worker.py                # QThread ワーカー（UI を止めない）
+│   ├── worker.py                # QThread ワーカー（変換・アップデート確認/DL）
 │   ├── core/                    # GUI 非依存の変換ロジック
 │   │   ├── scanner.py           # フォルダ走査・ジョブ列挙
 │   │   ├── decoder.py           # デコード・正規化（白背景合成など）
 │   │   ├── pdf_builder.py       # img2pdf による PDF 生成（DPI/用紙）
-│   │   └── converter.py         # 上記を束ねる・進捗/キャンセル
+│   │   ├── converter.py         # 上記を束ねる・進捗/キャンセル
+│   │   └── update.py            # GitHub Releases 照会・アセット選定・ダウンロード
 │   └── ui/
 │       ├── theme.py             # デザイントークン・QSS（ダークテーマ）・ダークタイトルバー
 │       ├── strings.py           # UI 文言の一元管理（将来の i18n 準備）

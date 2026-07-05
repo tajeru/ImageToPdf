@@ -16,6 +16,9 @@ from . import APP_NAME
 # HEIC/AVIF/GIF は初版では非対応（技術指示書 §2）。
 SUPPORTED_EXTS: frozenset[str] = frozenset({".webp", ".png", ".jpg", ".jpeg"})
 
+# --- アップデート確認先（GitHub Releases） ---------------------------------
+GITHUB_REPO = "tajeru/ImageToPdf"
+
 # --- DPI -----------------------------------------------------------------
 DEFAULT_DPI = 300
 MIN_DPI = 72

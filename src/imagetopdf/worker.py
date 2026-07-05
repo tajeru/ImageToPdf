@@ -11,6 +11,14 @@ from PySide6.QtCore import QThread, Signal
 
 from .config import ConvertOptions
 from .core.converter import ConvertResult, convert
+from .core.update import (
+    AssetInfo,
+    UpdateCheckError,
+    UpdateDownloadCancelled,
+    UpdateDownloadError,
+    download_asset,
+    fetch_latest_release,
+)
 from .logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -59,4 +67,57 @@ class ConvertWorker(QThread):
             self.completed.emit(result)
         except Exception as e:  # noqa: BLE001 - 想定外は致命扱いで通知
             log.exception("変換中に致命的エラー")
+            self.failed.emit(str(e))
+
+
+class UpdateCheckWorker(QThread):
+    """GitHub の最新リリースを問い合わせる（別スレッド・ネットワークI/O）。"""
+
+    # 公開リリースが見つかった場合は ReleaseInfo、無ければ None を emit。
+    checked = Signal(object)
+    failed = Signal(str)
+
+    def run(self) -> None:  # noqa: D401
+        try:
+            release = fetch_latest_release()
+            self.checked.emit(release)
+        except UpdateCheckError as e:
+            self.failed.emit(str(e))
+        except Exception as e:  # noqa: BLE001
+            log.exception("アップデート確認に失敗")
+            self.failed.emit(str(e))
+
+
+class UpdateDownloadWorker(QThread):
+    """アップデートアセットを別スレッドでダウンロードする。"""
+
+    progress = Signal(int, int)  # done_bytes, total_bytes
+    completed = Signal(object)  # 保存先 Path
+    cancelled = Signal()
+    failed = Signal(str)
+
+    def __init__(self, asset: AssetInfo, dest_dir: Path, parent=None) -> None:
+        super().__init__(parent)
+        self._asset = asset
+        self._dest_dir = Path(dest_dir)
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:  # noqa: D401
+        try:
+            path = download_asset(
+                self._asset,
+                self._dest_dir,
+                on_progress=lambda done, total: self.progress.emit(done, total),
+                should_cancel=lambda: self._cancel,
+            )
+            self.completed.emit(path)
+        except UpdateDownloadCancelled:
+            self.cancelled.emit()
+        except UpdateDownloadError as e:
+            self.failed.emit(str(e))
+        except Exception as e:  # noqa: BLE001
+            log.exception("アップデートのダウンロードに失敗")
             self.failed.emit(str(e))

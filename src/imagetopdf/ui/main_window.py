@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import subprocess
+import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QUrl, Qt
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -38,8 +41,10 @@ from ..config import (
     load_settings,
     save_settings,
 )
+from ..core import update
 from ..core.converter import ConvertResult
-from ..worker import ConvertWorker
+from ..core.update import AssetInfo, ReleaseInfo
+from ..worker import ConvertWorker, UpdateCheckWorker, UpdateDownloadWorker
 from . import strings, theme
 from .widgets import (
     ComboBox,
@@ -62,6 +67,8 @@ class MainWindow(QWidget):
         self._output_dir: Path | None = None
         self._worker: ConvertWorker | None = None
         self._last_open_dir: Path | None = None
+        self._update_check_worker: UpdateCheckWorker | None = None
+        self._update_download_worker: UpdateDownloadWorker | None = None
 
         self._build_ui()
         self._restore_settings()
@@ -96,6 +103,7 @@ class MainWindow(QWidget):
             self.seg_out,
             self.btn_out,
             self.btn_start,
+            self.btn_update,
         )
 
         self._update_mode_hint()
@@ -121,6 +129,11 @@ class MainWindow(QWidget):
         name_row.addWidget(title)
         name_row.addWidget(chip, 0, Qt.AlignVCenter)
         name_row.addStretch(1)
+        self.btn_update = QPushButton(strings.BTN_UPDATE)
+        self.btn_update.setProperty("cls", "ghostSmall")
+        self.btn_update.setCursor(Qt.PointingHandCursor)
+        self.btn_update.clicked.connect(self._check_for_update)
+        name_row.addWidget(self.btn_update, 0, Qt.AlignVCenter)
         col.addLayout(name_row)
 
         tagline = QLabel(strings.TAGLINE)
@@ -403,6 +416,130 @@ class MainWindow(QWidget):
         if self._last_open_dir and self._last_open_dir.is_dir():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._last_open_dir)))
 
+    # -------------------------------------------------------------- update
+    def _check_for_update(self) -> None:
+        if self._update_check_worker is not None:
+            return
+        self.btn_update.setEnabled(False)
+        self.btn_update.setText(strings.BTN_UPDATE_CHECKING)
+
+        self._update_check_worker = UpdateCheckWorker()
+        self._update_check_worker.checked.connect(self._on_update_checked)
+        self._update_check_worker.failed.connect(self._on_update_check_failed)
+        self._update_check_worker.finished.connect(self._on_update_check_finished)
+        self._update_check_worker.start()
+
+    def _reset_update_button(self) -> None:
+        self.btn_update.setText(strings.BTN_UPDATE)
+        self.btn_update.setEnabled(True)
+
+    def _on_update_check_finished(self) -> None:
+        self._update_check_worker = None
+
+    def _on_update_check_failed(self, message: str) -> None:
+        self._reset_update_button()
+        QMessageBox.warning(self, APP_NAME, strings.UPDATE_CHECK_FAILED.format(message=message))
+
+    def _on_update_checked(self, release: ReleaseInfo | None) -> None:
+        self._reset_update_button()
+        if release is None:
+            QMessageBox.information(self, APP_NAME, strings.UPDATE_NO_RELEASE)
+            return
+        if not update.is_newer(release.version, __version__):
+            QMessageBox.information(
+                self, APP_NAME, strings.UPDATE_UP_TO_DATE.format(version=__version__)
+            )
+            return
+
+        notes = release.notes or "(リリースノートはありません)"
+        if len(notes) > 600:
+            notes = notes[:600] + "…"
+        ret = QMessageBox.question(
+            self,
+            strings.UPDATE_AVAILABLE_TITLE,
+            strings.UPDATE_AVAILABLE_BODY.format(version=release.version, notes=notes),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if ret != QMessageBox.Yes:
+            return
+
+        asset = update.pick_windows_asset(release.assets)
+        if asset is None:
+            QMessageBox.information(self, APP_NAME, strings.UPDATE_NO_ASSET)
+            QDesktopServices.openUrl(QUrl(release.html_url))
+            return
+        self._download_update(asset)
+
+    def _download_update(self, asset: AssetInfo) -> None:
+        dest_dir = Path(tempfile.mkdtemp(prefix="imagetopdf_update_"))
+
+        dialog = QProgressDialog(
+            strings.UPDATE_DOWNLOADING.format(done="0.0", total="?"),
+            strings.UPDATE_PROGRESS_CANCEL,
+            0,
+            0,
+            self,
+        )
+        dialog.setWindowTitle(strings.UPDATE_PROGRESS_TITLE)
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+
+        worker = UpdateDownloadWorker(asset, dest_dir)
+        self._update_download_worker = worker
+
+        def on_progress(done: int, total: int) -> None:
+            if total:
+                dialog.setRange(0, total)
+                dialog.setValue(min(done, total))
+            dialog.setLabelText(
+                strings.UPDATE_DOWNLOADING.format(
+                    done=f"{done / (1024 * 1024):.1f}",
+                    total=f"{total / (1024 * 1024):.1f}" if total else "?",
+                )
+            )
+
+        def on_completed(path: Path) -> None:
+            dialog.close()
+            self._offer_install(Path(path))
+
+        def on_cancelled() -> None:
+            dialog.close()
+
+        def on_failed(message: str) -> None:
+            dialog.close()
+            QMessageBox.warning(self, APP_NAME, strings.UPDATE_DOWNLOAD_FAILED.format(message=message))
+
+        def on_thread_finished() -> None:
+            self._update_download_worker = None
+
+        worker.progress.connect(on_progress)
+        worker.completed.connect(on_completed)
+        worker.cancelled.connect(on_cancelled)
+        worker.failed.connect(on_failed)
+        worker.finished.connect(on_thread_finished)
+        dialog.canceled.connect(worker.cancel)
+
+        worker.start()
+        dialog.exec()
+
+    def _offer_install(self, installer_path: Path) -> None:
+        ret = QMessageBox.question(
+            self,
+            strings.UPDATE_READY_TITLE,
+            strings.UPDATE_READY_BODY.format(app=APP_NAME),
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if ret != QMessageBox.Yes:
+            return
+        try:
+            subprocess.Popen([str(installer_path)], close_fds=True)
+        except OSError as e:
+            QMessageBox.warning(self, APP_NAME, strings.UPDATE_LAUNCH_FAILED.format(message=str(e)))
+            return
+        self.close()
+
     # ---------------------------------------------------------- settings I/O
     def _restore_settings(self) -> None:
         s = load_settings()
@@ -451,5 +588,14 @@ class MainWindow(QWidget):
             if not self._worker.wait(5000):
                 self._set_status(strings.STATUS_CLOSING)
                 self._worker.wait()
+
+        # アップデート確認/ダウンロードのスレッドも、破棄前に必ず停止させる
+        # （QThread は走行中に破棄すると異常終了するため）。
+        if self._update_download_worker and self._update_download_worker.isRunning():
+            self._update_download_worker.cancel()
+            self._update_download_worker.wait()
+        if self._update_check_worker and self._update_check_worker.isRunning():
+            self._update_check_worker.wait()
+
         save_settings(self._current_settings())
         super().closeEvent(event)
