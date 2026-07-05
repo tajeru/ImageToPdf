@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# venv
+.venv/
+
+# PyInstaller / Inno Setup の成果物
+build/*.toc
+build/*.pyz
+/build/ImageToPDF/
+dist/
+Output/
+
+# テスト一時物
+_realtest/

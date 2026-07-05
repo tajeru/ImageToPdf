@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imagetopdf"
+version = "1.0.0"
+description = "WEBP/PNG/JPEG の画像フォルダを PDF に変換する GUI アプリ"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "img2pdf project" }]
+dependencies = [
+    "PySide6>=6.6",
+    "Pillow>=10.2",
+    "img2pdf>=0.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pypdf>=4.0", "pyinstaller>=6.3"]
+
+[project.gui-scripts]
+imagetopdf = "imagetopdf.app:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
